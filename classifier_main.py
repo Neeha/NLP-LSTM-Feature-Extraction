@@ -22,6 +22,8 @@ import re
 import itertools
 from itertools import *
 
+import nltk
+nltk.download('averaged_perceptron_tagger')
 def _parse_args():
     """
     Command-line arguments to the system. --model switches between the main modes you'll need to use. The other arguments
@@ -33,6 +35,7 @@ def _parse_args():
     parser.add_argument('--train_path', type=str, default='data/train.txt', help='path to train set (you should not need to modify)')
     parser.add_argument('--dev_path', type=str, default='data/dev.txt', help='path to dev set (you should not need to modify)')
     parser.add_argument('--blind_test_path', type=str, default='data/test_tweets.txt', help='path to dev set (you should not need to modify)')
+    parser.add_argument('--test_path_gold', type=str, default='data/test_tweets.txt', help='path to dev set (you should not need to modify)')
     parser.add_argument('--test_output_path', type=str, default='eng.testb.out', help='output path for test predictions')
     parser.add_argument('--no_run_on_test', dest='run_on_test', default=True, action='store_false', help='skip printing output on the test set')
     args = parser.parse_args()
@@ -383,9 +386,92 @@ def transform_input(ner_exs: List[LabeledSentence], data, vec):
 
     # def orthographic_structure(indexer:Indexer):
 
+def train_classifier_boosting(train_exs: List[SentimentExample], dev_exs: List[SentimentExample], test_exs:List[SentimentExample] , test_exs_gold: List[SentimentExample]) -> List[SentimentExample]:
+    # 59 is the max sentence length in the corpus, so let's set this to 60
+    seq_max_len = 60
+    # To get you started off, we'll pad the training input to 60 words to make it a square matrix.
+    train_mat = np.asarray([pad_to_length(np.array(ex.indexed_words), seq_max_len) for ex in train_exs])
+    # Also store the sequence lengths -- this could be useful for training LSTMs
+    train_seq_lens = np.array([len(ex.indexed_words) for ex in train_exs])
+    # Labels
+    train_labels_arr = np.array([ex.label for ex in train_exs])
 
+    # get numpy array with sequence length for dev and test
+    dev_mat = np.asarray([pad_to_length(np.array(ex.indexed_words), seq_max_len) for ex in dev_exs])
+    # Also store the sequence lengths -- this could be useful for training LSTMs
+    dev_seq_lens = np.array([len(ex.indexed_words) for ex in dev_exs])
+    # Labels
+    dev_labels_arr = np.array([ex.label for ex in dev_exs])
 
-def train_classifier(train_exs: List[SentimentExample], dev_exs: List[SentimentExample]) -> List[SentimentExample]:
+    test_mat = np.asarray([pad_to_length(np.array(ex.indexed_words), seq_max_len) for ex in test_exs])
+    # Also store the sequence lengths -- this could be useful for training LSTMs
+    test_seq_lens = np.array([len(ex.indexed_words) for ex in test_exs])
+    # Labels
+    test_labels_arr = np.array([ex.label for ex in test_exs])
+    #print(test_labels_arr)
+
+    test_mat_gold = np.asarray([pad_to_length(np.array(ex.indexed_words), seq_max_len) for ex in test_exs_gold])
+    # Also store the sequence lengths -- this could be useful for training LSTMs
+    test_seq_lens_gold = np.array([len(ex.indexed_words) for ex in test_exs_gold])
+    # Labels
+    test_labels_arr_gold = np.array([ex.label for ex in test_exs_gold])
+    #print(test_labels_arr)
+    '''
+    print("train mat shape:", train_mat.shape)
+    print("train label shape:", train_labels_arr.shape)
+    embeds = np.ones((train_mat.shape[0],train_mat.shape[1], 300))
+    #extract embeddings of indexes for train dataset
+    for i in range(train_mat.shape[0]):
+        for j in range(train_mat.shape[1]):
+            embeds[i,j]= word_vectors.get_embedding_from_index(int(train_mat[i,j]))
+
+    print(embeds.shape)
+
+    #extract embeddings of indexed for dev dataset
+    embeds_dev = np.ones((dev_mat.shape[0],dev_mat.shape[1], 300))
+
+    #extract embeddings of indexes for train dataset
+    for i in range(dev_mat.shape[0]):
+        for j in range(dev_mat.shape[1]):
+            embeds_dev[i,j]= word_vectors.get_embedding_from_index(int(dev_mat[i,j]))
+
+    print(embeds_dev.shape)
+
+    #reshape embeds to 2-d
+    '''
+    embeds = train_mat.reshape(train_mat.shape[0],train_mat.shape[1]*train_mat.shape[2])
+    embeds_dev = dev_mat.reshape(dev_mat.shape[0],dev_mat.shape[1]*dev_mat.shape[2])
+    embeds_test = test_mat.reshape(test_mat.shape[0],test_mat.shape[1]*test_mat.shape[2])
+    embeds_test_gold = test_mat_gold.reshape(test_mat_gold.shape[0],test_mat_gold.shape[1]*test_mat_gold.shape[2])
+    ## GradBoost
+    '''
+    from sklearn.metrics import classification_report, confusion_matrix
+    from sklearn.ensemble import GradientBoostingClassifier
+
+    lr_list = [0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1]
+
+    for learning_rate in lr_list:
+        gb_clf = GradientBoostingClassifier(n_estimators=250, learning_rate=learning_rate, max_features=2, max_depth=10, random_state=0)
+        gb_clf.fit(embeds, train_labels_arr)
+
+        print("Learning rate: ", learning_rate)
+        print("Accuracy score (training): {0:.3f}".format(gb_clf.score(embeds, train_labels_arr)))
+        print("Accuracy score (validation): {0:.3f}".format(gb_clf.score(embeds_dev, dev_labels_arr)))
+        print("Accuracy score (test): {0:.3f}".format(gb_clf.score(embeds_test, test_labels_arr)))
+        print("Accuracy score (test gold): {0:.3f}".format(gb_clf.score(embeds_test_gold, test_labels_arr_gold)))
+    '''
+    ## XGBoost
+    from xgboost import XGBClassifier
+    xgb_clf = XGBClassifier(n_estimators = 600)#,max_depth=10)
+    xgb_clf.fit(embeds, train_labels_arr)
+
+    print("Accuracy score (training): {0:.3f}".format(xgb_clf.score(embeds, train_labels_arr)))
+    print("Accuracy score (validation): {0:.3f}".format(xgb_clf.score(embeds_dev, dev_labels_arr)))
+    print("Accuracy score (test): {0:.3f}".format(xgb_clf.score(embeds_test, test_labels_arr)))
+    print("Accuracy score (test gold): {0:.3f}".format(xgb_clf.score(embeds_test_gold, test_labels_arr_gold)))
+    #'''
+
+def train_classifier_lstm(train_exs: List[SentimentExample], dev_exs: List[SentimentExample]) -> List[SentimentExample]:
 # def train_classifier(X, Y_train):
     # clf = LogisticRegression(penalty='l2', dual=False, tol=0.001, C=1.0, fit_intercept=True, intercept_scaling=1, class_weight=None, max_iter=100)
     # model = clf.fit(X, Y_train)
@@ -492,7 +578,7 @@ def train_classifier(train_exs: List[SentimentExample], dev_exs: List[SentimentE
                 num_correct = 0
 
     #save model
-    torch.save(net.state_dict(),'/home/neeha/UT/Sem3/NLP/FP/Mini 1/mini1-distrib/saved_model_features_rotten.pth')
+    #torch.save(net.state_dict(),'/home/neeha/UT/Sem3/NLP/FP/Mini 1/mini1-distrib/saved_model_features_rotten.pth')
     dev_losses = []
     num_correct = 0
 
@@ -513,6 +599,24 @@ def train_classifier(train_exs: List[SentimentExample], dev_exs: List[SentimentE
 
     dev_acc = num_correct/len(dev_loader.dataset)
     print("dev final accuracy: {:.3f}".format(dev_acc))
+    train_losses = []
+    num_correct = 0
+
+    for inputs, labels in train_loader:
+        output, val_h = net(inputs)
+        train_loss = criterion(output.squeeze(), labels.float())
+        train_losses.append(train_loss.item())
+        pred = torch.round(output.squeeze())
+        correct_tensor = pred.eq(labels.float().view_as(pred))
+        correct = np.squeeze(correct_tensor.numpy())
+        num_correct += np.sum(correct)
+
+    print("train final loss: {:.3f}".format(np.mean(train_losses)))
+    print("num_correct", num_correct)
+    print("len(train_loader.dataset):",len(train_loader.dataset))
+
+    train_acc = num_correct/len(train_loader.dataset)
+    print("train final accuracy: {:.3f}".format(train_acc))
 
     
 
@@ -663,9 +767,10 @@ if __name__ == '__main__':
     train_exs = read_and_index_sentiment_examples(args.train_path, indexer)
     dev_exs = read_and_index_sentiment_examples(args.dev_path, indexer)
     test_exs = read_and_index_sentiment_examples(args.blind_test_path, indexer)
+    test_exs_gold = read_and_index_sentiment_examples(args.test_path_gold, indexer)
 
     print("Data reading and training took %f seconds" % (time.time() - start_time))
-    model_path = '/home/neeha/UT/Sem3/NLP/FP/Mini 1/mini1-distrib/saved_model_features_rotten.pth'
+    #model_path = '/home/neeha/UT/Sem3/NLP/FP/Mini 1/mini1-distrib/saved_model_features_rotten.pth'
     # Train the model
     if args.model == "BAD":
         classifier = train_count_based_binary_classifier(train_class_exs)
@@ -675,7 +780,7 @@ if __name__ == '__main__':
         evaluate_classifier(dev_class_exs, classifier)
 
     else:
-        classifier = train_classifier(train_exs, dev_exs)
+        classifier = train_classifier(train_exs, dev_exs, test_exs, test_exs_gold)
         print("===Train accuracy===")
         print("===Dev accuracy===")
         evaluate_classifier(dev_exs, dev_exs, model_path)
